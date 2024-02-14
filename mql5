@@ -1,0 +1,147 @@
+
+// Gold Escavator Trading Bot
+// Developer's site: forexroboteasy.com
+// Development: Forex Robot Easy Team
+
+// Include necessary libraries and define constants
+#include <Trade\Trade.mqh>
+#include <Timeseries\Timeseries.mqh>
+#include <Object\Text.mqh>
+
+#define SYMBOL_NAME 'GBPUSD'
+#define STOP_LOSS_LEVEL 50
+#define TAKE_PROFIT_LEVEL 100
+#define RISK_PERCENTAGE 2
+#define TRADING_HOURS_START 6
+#define TRADING_HOURS_END 23
+#define GMT_OFFSET 3
+
+// Define global variables
+CTrade trade;
+CTimeseries series;
+int currentHour;
+int lastTradeHour = -1;
+
+// Function to calculate lot size based on risk percentage
+double CalculateLotSize(double riskPercentage)
+{
+    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    double accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double accountMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+    double accountFreeMargin = AccountInfoDouble(ACCOUNT_FREEMARGIN);
+
+    double maxLotSize = NormalizeDouble((accountEquity * riskPercentage / 100) / (STOP_LOSS_LEVEL * _Point), 2);
+    double availableLotSize = NormalizeDouble(accountFreeMargin / (STOP_LOSS_LEVEL * _Point), 2);
+
+    return MathMin(maxLotSize, availableLotSize);
+}
+
+// Function to check if current hour is within trading hours
+bool IsTradingHour(int currentHour)
+{
+    return (currentHour >= (TRADING_HOURS_START + GMT_OFFSET) && currentHour < (TRADING_HOURS_END + GMT_OFFSET));
+}
+
+// Function to execute a buy trade
+void BuyTrade()
+{
+    double lotSize = CalculateLotSize(RISK_PERCENTAGE);
+    double entryPrice = NormalizeDouble(SymbolInfoDouble(SYMBOL_NAME, SYMBOL_ASK), _Digits);
+    double stopLoss = NormalizeDouble(entryPrice - STOP_LOSS_LEVEL * _Point, _Digits);
+    double takeProfit = NormalizeDouble(entryPrice + TAKE_PROFIT_LEVEL * _Point, _Digits);
+
+    if (trade.Buy(lotSize, entryPrice, stopLoss, takeProfit, '', 0, 0, SYMBOL_NAME))
+    {
+        ObjectCreate('entry', OBJ_TEXT, 0, TimeCurrent(), entryPrice);
+        ObjectSetText('entry', 'Buy Entry', 9, 'Arial', clrGreen);
+
+        Print('Buy trade executed.');
+        lastTradeHour = currentHour;
+    }
+}
+
+// Function to execute a sell trade
+void SellTrade()
+{
+    double lotSize = CalculateLotSize(RISK_PERCENTAGE);
+    double entryPrice = NormalizeDouble(SymbolInfoDouble(SYMBOL_NAME, SYMBOL_BID), _Digits);
+    double stopLoss = NormalizeDouble(entryPrice + STOP_LOSS_LEVEL * _Point, _Digits);
+    double takeProfit = NormalizeDouble(entryPrice - TAKE_PROFIT_LEVEL * _Point, _Digits);
+
+    if (trade.Sell(lotSize, entryPrice, stopLoss, takeProfit, '', 0, 0, SYMBOL_NAME))
+    {
+        ObjectCreate('entry', OBJ_TEXT, 0, TimeCurrent(), entryPrice);
+        ObjectSetText('entry', 'Sell Entry', 9, 'Arial', clrRed);
+
+        Print('Sell trade executed.');
+        lastTradeHour = currentHour;
+    }
+}
+
+// Initialize the trading bot
+int OnInit()
+{
+    series.Create(SYMBOL_NAME, PERIOD_H1);
+    trade.SetExpertMagicNumber(123456);
+
+    return(INIT_SUCCEEDED);
+}
+
+// Main function to execute trades
+void OnTick()
+{
+    currentHour = TimeHour(TimeCurrent());
+
+    // Check if current hour is within trading hours and not same as last trade hour
+    if (IsTradingHour(currentHour) && currentHour != lastTradeHour)
+    {
+        // Check for buy or sell signal based on predefined trading criteria
+        if (series.iRSI(SYMBOL_NAME, PERIOD_H1, 14, PRICE_CLOSE, 0) > 70)
+        {
+            BuyTrade();
+        }
+        else if (series.iRSI(SYMBOL_NAME, PERIOD_H1, 14, PRICE_CLOSE, 0) < 30)
+        {
+            SellTrade();
+        }
+    }
+
+    // Monitor open trades and adjust stop loss and take profit levels
+    for (int i = 0; i < OrdersTotal(); i++)
+    {
+        if (OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+        {
+            if (OrderSymbol() == SYMBOL_NAME && OrderMagicNumber() == 123456)
+            {
+                double entryPrice = OrderOpenPrice();
+                double newStopLoss = NormalizeDouble(entryPrice - STOP_LOSS_LEVEL * _Point, _Digits);
+                double newTakeProfit = NormalizeDouble(entryPrice + TAKE_PROFIT_LEVEL * _Point, _Digits);
+
+                if (OrderType() == OP_BUY)
+                {
+                    if (OrderStopLoss() != newStopLoss || OrderTakeProfit() != newTakeProfit)
+                    {
+                        trade.Modify(OrderTicket(), entryPrice, newStopLoss, newTakeProfit, 0);
+                        ObjectCreate('sl_tp', OBJ_TEXT, 0, TimeCurrent(), entryPrice);
+                        ObjectSetText('sl_tp', 'SL/TP Modified', 9, 'Arial', clrBlue);
+                    }
+                }
+                else if (OrderType() == OP_SELL)
+                {
+                    if (OrderStopLoss() != newStopLoss || OrderTakeProfit() != newTakeProfit)
+                    {
+                        trade.Modify(OrderTicket(), entryPrice, newStopLoss, newTakeProfit, 0);
+                        ObjectCreate('sl_tp', OBJ_TEXT, 0, TimeCurrent(), entryPrice);
+                        ObjectSetText('sl_tp', 'SL/TP Modified', 9, 'Arial', clrBlue);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Cleanup function
+void OnDeinit(const int reason)
+{
+    series.Clean();
+}
